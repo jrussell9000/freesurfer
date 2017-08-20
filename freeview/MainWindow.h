@@ -381,6 +381,8 @@ protected:
   void CommandSetSmoothed       ( const QStringList& cmd );
   void CommandGoToLabel         ( const QStringList& cmd );
   void CommandSaveLayer         ( const QStringList& cmd );
+  void CommandSetTrackColor     ( const QStringList& cmd );
+  void CommandSetTrackRender    ( const QStringList& cmd );
 
 public:
   void CommandSetCamera         ( const QStringList& cmd );
@@ -409,7 +411,7 @@ protected slots:
   void OnCloseROI();
   void OnNewPointSet();
   void OnLoadPointSet();
-  void OnSavePointSet();
+  void OnSavePointSet(bool bForce = false);
   void OnSavePointSetAs();
   void OnClosePointSet();
   void OnLoadTrack();
@@ -514,6 +516,8 @@ protected slots:
   void On2DCursorClicked();
 
   void ReorderLayers(const QList<Layer*>& layers);
+
+  void OnLoadSurfaceLabelRequested(const QString& fn);
 
 private:
   bool DoParseCommand(MyCmdLineParser* parser, bool bAutoQuit);

@@ -105,6 +105,7 @@ LayerSurface::LayerSurface( LayerMRI* ref, QObject* parent ) : LayerEditable( pa
     m_sliceActor3D[i] = vtkSmartPointer<vtkActor>::New();
     m_vectorActor2D[i] = vtkSmartPointer<vtkActor>::New();
     m_vertexActor2D[i] = vtkSmartPointer<vtkActor>::New();
+    m_vertexActor2D[i]->SetProperty( m_vertexActor2D[i]->MakeProperty() );
     m_vertexActor2D[i]->GetProperty()->SetRepresentationToPoints();
     m_vertexActor2D[i]->VisibilityOff();
   }
@@ -309,6 +310,7 @@ bool LayerSurface::WriteIntersection(const QString &filename, int nPlane, LayerM
     }
     cout << "Intersection data written to " << qPrintable(filename) << "\n";
   }
+  return true;
 }
 
 bool LayerSurface::LoadVectorFromFile( )
@@ -706,11 +708,11 @@ void LayerSurface::InitializeActors()
     //    m_sliceActor3D[i]->GetProperty()->SetInterpolationToFlat();
 
     vtkSmartPointer<vtkPolyDataMapper> mapper3 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    //    vtkSmartPointer<vtkMaskPoints> pts = vtkSmartPointer<vtkMaskPoints>::New();
-    //    pts->GenerateVerticesOn();
-    //    pts->SetOnRatio(1);
-    //    pts->SetInputConnection(m_cutter[i]->GetOutputPort());
-    mapper3->SetInputConnection( m_cutter[i]->GetOutputPort() );
+    vtkSmartPointer<vtkMaskPoints> pts = vtkSmartPointer<vtkMaskPoints>::New();
+    pts->GenerateVerticesOn();
+    pts->SetOnRatio(1);
+    pts->SetInputConnection(m_cutter[i]->GetOutputPort());
+    mapper3->SetInputConnection( pts->GetOutputPort() );
     mapper3->ScalarVisibilityOff();
     m_vertexActor2D[i]->SetMapper(mapper3);
     m_vertexActor2D[i]->SetProperty( m_vertexActor2D[i]->MakeProperty() );
@@ -1471,7 +1473,7 @@ void LayerSurface::UpdateOverlay(bool bAskRedraw, bool pre_cached)
     {
       if ( mapper )
       {
-        int nCount = polydata->GetPoints()->GetNumberOfPoints();
+        vtkIdType nCount = polydata->GetPoints()->GetNumberOfPoints();
         vtkSmartPointer<vtkUnsignedCharArray> array = vtkUnsignedCharArray::SafeDownCast( polydata->GetPointData()->GetArray( "Overlay" ) );
         if ( array.GetPointer() == NULL )
         {
@@ -1495,13 +1497,13 @@ void LayerSurface::UpdateOverlay(bool bAskRedraw, bool pre_cached)
             {
               double* dColor = GetProperty()->GetBinaryColor();
               unsigned char rgba[4] = { (unsigned char)(dColor[0]*255), (unsigned char)(dColor[1]*255), (unsigned char)(dColor[2]*255), 255 };
-              for (size_t i = 0; i < nCount*4; i+=4)
+              for (vtkIdType i = 0; i < nCount*4; i+=4)
                 memcpy(data+i, rgba, 4);
             }
             else
             {
               QList<int>& rgb = m_rgbMaps[m_nActiveRGBMap].data;
-              for (size_t i = 0; i < nCount; i++)
+              for (vtkIdType i = 0; i < nCount; i++)
               {
                 data[i*4] = rgb[i*3];
                 data[i*4+1] = rgb[i*3+1];
@@ -1794,9 +1796,8 @@ void LayerSurface::DeleteLabel(SurfaceLabel *label)
             SetActiveLabel(i);
         }
       }
-      delete label;
+      label->deleteLater();
       emit SurfaceLabelDeleted(label);
-
       UpdateOverlay(false);
       emit Modified();
       emit ActorChanged();
@@ -2016,6 +2017,7 @@ bool LayerSurface::GetActiveLabelCentroidPosition(double *pos)
   {
     return GetTargetAtVertex(nvo, pos);
   }
+  return false;
 }
 
 void LayerSurface::RemoveCurrentOverlay()

@@ -30,6 +30,7 @@
 #include "vtkMatrix4x4.h"
 #include "CommonDataStruct.h"
 #include <QList>
+#include <QVariantMap>
 
 extern "C"
 {
@@ -39,13 +40,14 @@ extern "C"
 
 class FSVolume;
 
-struct WayPoint
+struct ControlPoint
 {
   double pt[3];
   double value;
+  QVariantMap info; // enhanced fields
 };
 
-typedef QList<WayPoint> PointSet;
+typedef QList<ControlPoint> PointSet;
 
 class FSPointSet : public QObject
 {
@@ -56,7 +58,7 @@ public:
   bool ReadAsLabel( const QString& filename );
   bool ReadAsControlPoints( const QString& filename );
   bool WriteAsLabel( const QString& filename );
-  bool WriteAsControlPoints( const QString& filename );
+  bool WriteAsControlPoints(const QString& filename);
 
   static bool IsLabelFormat( const QString& filename );
 
@@ -68,9 +70,23 @@ public:
 
   bool GetCentroidRASPosition(double* pos, FSVolume* ref_vol);
 
+  double GetMinStat()
+  {
+    return m_dStatMin;
+  }
+
+  double GetMaxStat()
+  {
+    return m_dStatMax;
+  }
+
 protected:
+  void UpdateStatRange();
+
   // use label to save way points
   LABEL*   m_label;
+  double   m_dStatMin;
+  double   m_dStatMax;
 };
 
 #endif

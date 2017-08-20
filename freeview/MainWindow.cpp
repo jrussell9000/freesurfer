@@ -108,9 +108,10 @@
 #include "DialogThresholdVolume.h"
 #include "DialogVolumeSegmentation.h"
 #include <QProcessEnvironment>
-#include "Json.h"
+#include <QJsonDocument>
 #include "DialogThresholdFilter.h"
 #include "DialogLoadTransform.h"
+#include "LayerPropertyTrack.h"
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 0, 0))
 #include <QtWidgets>
 #endif
@@ -198,6 +199,13 @@ MainWindow::MainWindow( QWidget *parent, MyCmdLineParser* cmdParser ) :
   connect(ui->widgetAllLayers, SIGNAL(ToReorderLayers(QList<Layer*>)), this, SLOT(ReorderLayers(QList<Layer*>)));
   for (int i = 0; i < 4; i++)
     connect(ui->widgetAllLayers, SIGNAL(CurrentLayerSelected(Layer*)), m_views[i], SLOT(SetScalarBarLayer(Layer*)));
+
+  connect(m_layerCollections["MRI"], SIGNAL(LayerAdded(Layer*)), m_views[3], SLOT(OnLayerVisibilityChanged()));
+  connect(m_layerCollections["MRI"], SIGNAL(LayerRemoved(Layer*)), m_views[3], SLOT(OnLayerVisibilityChanged()));
+  connect(m_layerCollections["MRI"], SIGNAL(LayerVisibilityChanged()), m_views[3], SLOT(OnLayerVisibilityChanged()));
+  connect(m_layerCollections["Surface"], SIGNAL(LayerAdded(Layer*)), m_views[3], SLOT(OnLayerVisibilityChanged()));
+  connect(m_layerCollections["Surface"], SIGNAL(LayerRemoved(Layer*)), m_views[3], SLOT(OnLayerVisibilityChanged()));
+  connect(m_layerCollections["Surface"], SIGNAL(LayerVisibilityChanged()), m_views[3], SLOT(OnLayerVisibilityChanged()));
 
   m_dlgCropVolume = new DialogCropVolume(this);
   m_dlgCropVolume->hide();
@@ -1592,6 +1600,14 @@ void MainWindow::RunScript()
   {
     CommandLoadTrack(sa);
   }
+  else if ( cmd == "settrackcolor")
+  {
+    CommandSetTrackColor( sa );
+  }
+  else if ( cmd == "settrackrender")
+  {
+    CommandSetTrackRender( sa );
+  }
   else if ( cmd == "screencapture" )
   {
     CommandScreenCapture( sa );
@@ -2737,8 +2753,49 @@ void MainWindow::CommandLoadROI( const QStringList& cmd )
 
 void MainWindow::CommandLoadTrack(const QStringList &cmd)
 {
-  QString fn = cmd[1];
+  QStringList list = cmd[1].split(":");
+  QString fn = list[0];
   LoadTrackFile( fn );
+  if (list.size() > 1)
+  {
+    for (int i = 1; i < list.size(); i++)
+    {
+      QStringList sublist = list[i].split("=");
+      if (sublist.size() > 1)
+      {
+        if (sublist[0] == "color")
+          m_scripts.insert(0, QStringList("settrackcolor") << sublist[1]);
+        else if (sublist[0] == "render")
+          m_scripts.insert(0, QStringList("settrackrender") << sublist[1]);
+        else
+          cerr << "Unrecognized sub-option flag '" << sublist[0].toLatin1().constData() << "'.\n";
+      }
+    }
+  }
+}
+
+void MainWindow::CommandSetTrackColor(const QStringList &cmd)
+{
+  LayerTrack* layer = (LayerTrack*)GetActiveLayer("Tract");
+  if (layer && cmd.size() > 1)
+  {
+    QColor color = ParseColorInput(cmd[1]);
+    if (color.isValid())
+    {
+      layer->GetProperty()->SetColorCode(LayerPropertyTrack::SolidColor);
+      layer->GetProperty()->SetSolidColor(color);
+    }
+  }
+}
+
+void MainWindow::CommandSetTrackRender(const QStringList &cmd)
+{
+  LayerTrack* layer = (LayerTrack*)GetActiveLayer("Tract");
+  if (layer && cmd.size() > 1)
+  {
+    if (cmd[1] == "tube" || cmd[1] == "tubes")
+      layer->GetProperty()->SetRenderRep(LayerPropertyTrack::Tube);
+  }
 }
 
 void MainWindow::CommandLoadSurface( const QStringList& cmd )
@@ -2768,8 +2825,8 @@ void MainWindow::CommandLoadSurface( const QStringList& cmd )
     if (nOverlay == 0)    // first one is not overlay file but actually surface file
       surface_fn = sa_fn[0];
     bool bLoadAll = false;
-    bool bLabelOutline = false;
-    QString labelColor;
+//    bool bLabelOutline = false;
+//    QString labelColor;
     QString overlay_reg;
     QString overlay_opacity;
     QString overlay_frame;
@@ -3310,6 +3367,7 @@ void MainWindow::CommandSetSurfaceLabelOutline(const QStringList &cmd)
 
 void MainWindow::CommandHideSurfaceLabel(const QStringList &cmd)
 {
+  Q_UNUSED(cmd);
   LayerSurface* surf = (LayerSurface*)GetLayerCollection( "Surface" )->GetActiveLayer();
   if ( surf && surf->GetActiveLabel())
   {
@@ -3821,7 +3879,7 @@ void MainWindow::CommandLoadWayPoints( const QStringList& cmd )
   QString fn = options[0];
   QString color = "null";
   QString spline_color = "null";
-  QString radius = "0";
+  QString radius = "1";
   QString spline_radius = "0";
   QString spline_heatmap;
   for ( int i = 1; i < options.size(); i++ )
@@ -3872,7 +3930,7 @@ void MainWindow::CommandLoadWayPoints( const QStringList& cmd )
     m_scripts.insert( 0, QStringList("setpointsetcolor") << color << spline_color );
   }
 
-  if ( radius != "0" || spline_radius != "0" )
+  if ( radius != "1" || spline_radius != "0" )
   {
     m_scripts.insert( 0, QStringList("setpointsetradius") << radius << spline_radius );
   }
@@ -3972,11 +4030,11 @@ void MainWindow::CommandSetPointSetRadius( const QStringList& cmd )
   LayerPointSet* wp = (LayerPointSet*)GetLayerCollection( "PointSet" )->GetActiveLayer();
   if ( wp )
   {
-    if ( cmd[1] != "0" )
+    if ( !cmd[1].isEmpty() )
     {
       bool bOK;
       double dvalue = cmd[1].toDouble(&bOK);
-      if ( bOK)
+      if ( bOK && dvalue >= 0)
       {
         wp->GetProperty()->SetRadius( dvalue );
       }
@@ -4049,6 +4107,7 @@ void MainWindow::CommandScreenCapture( const QStringList& cmd )
 
 void MainWindow::CommandFlyThrough(const QStringList &cmd)
 {
+  Q_UNUSED(cmd);
   if (GetMainViewId() > 2)
   {
     cerr << "Can not fly through. Please set main viewport to 2D slice view.\n";
@@ -4652,14 +4711,39 @@ bool MainWindow::OffsetSlicePosition( int nPlane, double dPosDiff, bool bRoundTo
 {
   bool bRet = false;
   QStringList keys = m_layerCollections.keys();
-  for ( int i = 0; i < keys.size(); i++ )
+  LayerCollection* lc_mri = m_layerCollections["MRI"];
+  if (!lc_mri->IsEmpty())
   {
-    m_layerCollections[keys[i]]->blockSignals( true );
-    if ( m_layerCollections[keys[i]]->OffsetSlicePosition( nPlane, dPosDiff, bRoundToGrid ) )
+    lc_mri->blockSignals( true );
+    if ( lc_mri->OffsetSlicePosition( nPlane, dPosDiff, bRoundToGrid ) )
     {
       bRet = true;
     }
-    m_layerCollections[keys[i]]->blockSignals( false );
+    lc_mri->blockSignals( false );
+    if (bRet)
+    {
+      keys.removeOne("MRI");
+      double slicePos[3];
+      lc_mri->GetSlicePosition(slicePos);
+      for ( int i = 0; i < keys.size(); i++ )
+      {
+        m_layerCollections[keys[i]]->blockSignals( true );
+        m_layerCollections[keys[i]]->SetSlicePosition(nPlane, slicePos[nPlane]);
+        m_layerCollections[keys[i]]->blockSignals( false );
+      }
+    }
+  }
+  else
+  {
+    for ( int i = 0; i < keys.size(); i++ )
+    {
+      m_layerCollections[keys[i]]->blockSignals( true );
+      if ( m_layerCollections[keys[i]]->OffsetSlicePosition( nPlane, dPosDiff, bRoundToGrid ) )
+      {
+        bRet = true;
+      }
+      m_layerCollections[keys[i]]->blockSignals( false );
+    }
   }
   if ( bRet )
   {
@@ -5293,7 +5377,7 @@ void MainWindow::OnLoadPointSet()
   }
 }
 
-void MainWindow::OnSavePointSet()
+void MainWindow::OnSavePointSet(bool bForce)
 {
   LayerPointSet* layer = (LayerPointSet*)GetActiveLayer("PointSet");
   if ( !layer )
@@ -5307,22 +5391,14 @@ void MainWindow::OnSavePointSet()
   }
 
   QString fn = layer->GetFileName();
-  if ( fn.isEmpty() )
+  if ( fn.isEmpty() || (!bForce && layer->IsEnhanced() && layer->GetProperty()->GetType() != LayerPropertyPointSet::Enhanced) )
   {
+    if (layer->IsEnhanced())
+      QMessageBox::information(this, "Save Point Set", "To save comments or other added information, it is recommended to save point set in enhanced format in Json.");
     OnSavePointSetAs();
   }
   else
   {
-    if ( layer->GetProperty()->GetType() == LayerPropertyPointSet::WayPoint &&
-         QFileInfo(fn).suffix() != "label")
-    {
-      fn += ".label";
-    }
-    if ( layer->GetProperty()->GetType() == LayerPropertyPointSet::ControlPoint &&
-         QFileInfo(fn).suffix() != "dat" )
-    {
-      fn += ".dat";
-    }
     layer->SetFileName( fn );
     layer->ResetModified();
     if (layer->Save())
@@ -5351,17 +5427,20 @@ void MainWindow::OnSavePointSetAs()
   }
 
   DialogSavePointSet dlg( this );
-  dlg.SetType( layer->GetProperty()->GetType() );
   QString fn = layer->GetFileName();
   if (fn.isEmpty())
     fn = layer->GetName();
-  dlg.SetFileName(fn);
+  int nType = layer->GetProperty()->GetType();
+  if (layer->IsEnhanced())
+    nType = LayerPropertyPointSet::Enhanced;
+  dlg.SetFileName(fn, nType);
+  dlg.SetType(nType);
   dlg.SetLastDir(m_strLastDir);
   if ( dlg.exec() == QDialog::Accepted )
   {
     layer->SetFileName( dlg.GetFileName() );
     layer->GetProperty()->SetType( dlg.GetType() );
-    OnSavePointSet();
+    OnSavePointSet(true);
     ui->widgetAllLayers->UpdateWidgets();
   }
 }
@@ -7067,16 +7146,13 @@ void MainWindow::SetSplinePicking(bool b)
 
 void MainWindow::OnReloadVolume()
 {
-  LayerMRI* mri = qobject_cast<LayerMRI*>(this->GetActiveLayer("MRI"));
-  if (mri)
+  QList<Layer*> layers = GetSelectedLayers("MRI");
+  if (!layers.isEmpty())
   {
     DialogReloadLayer dlg;
-    QString name = mri->GetName();
-    QString filename = mri->GetFileName();
-    QString reg_fn = mri->GetRegFileName();
-    if (dlg.Execute(name, "Volume", filename) == QDialog::Accepted)
+    if (dlg.Execute(layers) == QDialog::Accepted)
     {
-      m_volumeSettings = mri->GetProperty()->GetFullSettings();
+//      m_volumeSettings = mri->GetProperty()->GetFullSettings();
       if (dlg.GetCloseLayerFirst())
       {
         if (!OnCloseVolume())
@@ -7085,27 +7161,54 @@ void MainWindow::OnReloadVolume()
           return;
         }
       }
-      this->LoadVolumeFile(filename, reg_fn);
+      for (int i = layers.size()-1; i >= 0; i--)
+      {
+        LayerMRI* mri = qobject_cast<LayerMRI*>(layers[i]);
+        QString name = mri->GetName();
+        QString filename = mri->GetFileName();
+        QString reg_fn = mri->GetRegFileName();
+        QString args = filename + ":name=" + name;
+        if (!reg_fn.isEmpty())
+          args += ":reg=" + reg_fn;
+        QString colormap = "grayscale";
+        switch (mri->GetProperty()->GetColorMap())
+        {
+        case LayerPropertyMRI::LUT:
+          colormap = "lut";
+          break;
+        case LayerPropertyMRI::Heat:
+          colormap = "heat";
+          break;
+        }
+        args += ":colormap=" + colormap;
+
+        AddScript(QStringList("loadvolume") << args);
+      }
     }
   }
 }
 
 void MainWindow::OnReloadSurface()
 {
-  LayerSurface* surf = qobject_cast<LayerSurface*>(this->GetActiveLayer("Surface"));
-  if (surf)
+  QList<Layer*> layers = GetSelectedLayers("Surface");
+  if (!layers.isEmpty())
   {
     DialogReloadLayer dlg;
-    QString name = surf->GetName();
-    QString filename = surf->GetFileName();
-    if (dlg.Execute(name, "Surface", filename) == QDialog::Accepted)
+    if (dlg.Execute(layers) == QDialog::Accepted)
     {
-      m_surfaceSettings = surf->GetProperty()->GetFullSettings();
+//      m_surfaceSettings = surf->GetProperty()->GetFullSettings();
       if (dlg.GetCloseLayerFirst())
       {
         OnCloseSurface();
       }
-      this->LoadSurfaceFile(filename);
+      for (int i = layers.size()-1; i >= 0; i--)
+      {
+        LayerSurface* surf = qobject_cast<LayerSurface*>(layers[i]);
+        double* ec = surf->GetProperty()->GetEdgeColor();
+        QString args = QString("%1:name=%2:edge_color=%3,%4,%5").arg(surf->GetFileName()).arg(surf->GetName())
+                    .arg((int)(ec[0]*255)).arg((int)(ec[1]*255)).arg((int)(ec[2]*255));
+        AddScript(QStringList("loadsurface") << args);
+      }
     }
   }
 }
@@ -7322,12 +7425,11 @@ void MainWindow::OnToolSaveCamera()
   QString fn = QFileDialog::getSaveFileName(this, "Save Camera", m_strLastDir, "All files (*)");
   if (!fn.isEmpty())
   {
-    Json json;
     QVariantMap cam = ui->view3D->GetCamera();
     QFile file(fn);
     if (file.open(QIODevice::WriteOnly))
     {
-      file.write(json.encode(cam).toUtf8());
+      file.write(QJsonDocument::fromVariant(cam).toJson());
       file.close();
     }
   }
@@ -7343,8 +7445,7 @@ void MainWindow::OnToolLoadCamera(const QString& fn_in)
     QFile file(fn);
     if (file.open(QIODevice::ReadOnly))
     {
-      Json json;
-      QVariantMap cam = json.decode(file.readAll());
+      QVariantMap cam = QJsonDocument::fromJson(file.readAll()).toVariant().toMap();
       file.close();
       ui->view3D->SetCamera(cam);
     }
@@ -7630,4 +7731,10 @@ void MainWindow::OnApplyVolumeTransform()
       this->LoadVolumeFile(filename, dlg.GetFilename(), m_bResampleToRAS, dlg.GetSampleMethod());
     }
   }
+}
+
+void MainWindow::OnLoadSurfaceLabelRequested(const QString &fn)
+{
+  AddScript(QStringList("loadsurfacelabel") << fn);
+  AddScript(QStringList("hidesurfacelabel"));
 }

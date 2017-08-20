@@ -41,6 +41,7 @@
 #include "vtkImageChangeInformation.h"
 #include "vtkMath.h"
 #include "vtkTransform.h"
+#include "MyVTKUtils.h"
 #include "vtkMatrix4x4.h"
 #include <QFileInfo>
 #include <QFile>
@@ -213,12 +214,12 @@ bool FSVolume::LoadMRI( const QString& filename, const QString& reg_filename )
   UpdateHistoCDF();
   if (m_bValidHistogram)
   {
-    double val = GetHistoValueFromPercentile(0.9)*1.1; //+m_histoCDF->bin_size/2;
+    double val = GetHistoValueFromPercentile(0.95)*1.1; //+m_histoCDF->bin_size/2;
     if (m_fMaxValue > 10*val)
     {
       // abnormally high voxel value
       UpdateHistoCDF(0, val);
-      val = GetHistoValueFromPercentile(0.9)*1.1; //+m_histoCDF->bin_size/2;
+      val = GetHistoValueFromPercentile(0.95)*1.1; //+m_histoCDF->bin_size/2;
       m_fMaxValue = val;
     }
   }
@@ -1116,6 +1117,10 @@ bool FSVolume::UpdateMRIFromImage( vtkImageData* rasImage, bool resampleToOrigin
   int nProgress = 0;
   int nstart = global_progress_range[0];
   int nend = global_progress_range[1];
+  char* ptr = (char*)rasImage->GetScalarPointer();
+  int scalar_type = rasImage->GetScalarType();
+  int* dim = rasImage->GetDimensions();
+  int nNumberOfFrames = rasImage->GetNumberOfScalarComponents();
   if ( mri->nframes > 1 )
   {
     global_progress_range[1] = nstart+(nend-nstart)*2/3;
@@ -1127,7 +1132,8 @@ bool FSVolume::UpdateMRIFromImage( vtkImageData* rasImage, bool resampleToOrigin
         {
           for ( int nFrame = 0; nFrame < mri->nframes; nFrame++ )
           {
-            float val = rasImage->GetScalarComponentAsFloat(i, j, k, nFrame);
+//            float val = rasImage->GetScalarComponentAsFloat(i, j, k, nFrame);
+            float val = (float)MyVTKUtils::GetImageDataComponent(ptr, dim, nNumberOfFrames, i, j, k, nFrame, scalar_type);
             switch ( mri->type )
             {
             case MRI_UCHAR:
@@ -2945,45 +2951,13 @@ void FSVolume::UpdateHistoCDF(int frame, float threshold)
   MRInonzeroValRange(m_MRI, &fMinValue, &fMaxValue);
   if (fMinValue == fMaxValue)
   {
-    //  qDebug() << "Could not create histogram because min value is equal to max value.";
+    qDebug() << "Could not create histogram because non-zero min value is equal to max value.";
     m_bValidHistogram = false;
     return;
   }
 
-  /*
-  HISTO *histo = HISTOinit(NULL, NUM_OF_HISTO_BINS, fMinValue, threshold>=0?threshold:fMaxValue);
-
-  if (!histo)
-  {
-      qDebug() << "Could not create HISTO";
-      return;
-  }
-
-  for (int x = 0 ; x < m_MRI->width; x++)
-  {
-      for (int y = 0 ; y < m_MRI->height; y++)
-      {
-          for (int z = 0 ; z < m_MRI->depth; z++)
-          {
-              float val = MRIgetVoxVal(m_MRI, x, y, z, frame) ;
-              if (!FZERO(val) && (threshold < 0 || val < threshold))
-                  HISTOaddSample(histo, val, 0, 0) ;
-          }
-      }
-  }
-
-  if (m_histoCDF)
-      HISTOfree(&m_histoCDF);
-
-  m_histoCDF = HISTOmakeCDF(histo, NULL);
-  if (!m_histoCDF)
-      qDebug() << "Could not create HISTO";
-
-  HISTOfree(&histo);
-*/
-
   if (threshold < 0)
-    threshold = fMaxValue;
+    threshold = fMinValue;
 
   MRI_REGION region;
   region.x = region.y = region.z = 0;

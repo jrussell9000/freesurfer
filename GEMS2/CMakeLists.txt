@@ -33,8 +33,20 @@ OPTION( BUILD_GUI "Build GUI components (requires FLTK and VTK)" OFF )
 
 OPTION( BUILD_MATLAB "Build Matlab wrappers" OFF )
 
+#
+IF( BUILD_EXECUTABLES OR BUILD_GUI )
+  #
+  ADD_DEFINITIONS( -DUSE_DYNAMIC_MESH )
+  
+  # 
+  MESSAGE( WARNING 
+           "Since you're building executables to compute meshes, ITK dynamic meshes will be used (internally using std::map instead of std::vector to store lists of points, cells, etc). Everything will still work, but anything that only uses existing meshes will be slower than it could be (up to 100% slower)" )
+ENDIF( BUILD_EXECUTABLES OR BUILD_GUI )
+
+
+
 # Enable C++11 syntax
-SET(CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
+SET(CMAKE_CXX_FLAGS "-g -std=c++11 ${CMAKE_CXX_FLAGS}")
 
 # Find CUDA
 FIND_PACKAGE( CUDA )
@@ -56,20 +68,30 @@ ADD_LIBRARY( kvlGEMSCommon
              kvlAtlasMeshSmoother.cxx
              kvlCompressionLookupTable.cxx
              kvlCroppedImageReader.cxx
+             #kvlAtlasMeshAveragingConjugateGradientOptimizer.cxx
+             kvlAtlasMeshRasterizor.cxx
+             kvlAtlasMeshAlphaDrawer.cxx
+             kvlAtlasMeshMultiAlphaDrawer.cxx
+             kvlAtlasMeshVisitCounter.cxx
+             kvlAtlasMeshStatisticsCollector.cxx
+             kvlAtlasMeshLabelImageStatisticsCollector.cxx
+             kvlAtlasMeshProbabilityImageStatisticsCollector.cxx
              kvlAtlasMeshDeformationOptimizer.cxx
+             kvlAtlasMeshDeformationFixedStepGradientDescentOptimizer.cxx
+             kvlAtlasMeshDeformationGradientDescentOptimizer.cxx
              kvlAtlasMeshDeformationConjugateGradientOptimizer.cxx
-             kvlAtlasMeshDeformationConjugateGradientOptimizerCPU.cxx
-             kvlAtlasMeshAveragingConjugateGradientOptimizer.cxx
-             kvlAtlasMeshRasterizorCPU.cxx
-             kvlAtlasMeshAlphaDrawerCPU.cxx
-             kvlAtlasMeshVisitCounterCPU.cxx
-             kvlAtlasMeshToIntensityImageGradientCalculator.cxx
-             kvlAtlasMeshToIntensityImageGradientCalculatorCPU.cxx
+             kvlAtlasMeshDeformationLBFGSOptimizer.cxx
+             kvlAtlasMeshPositionCostAndGradientCalculator.cxx
+             kvlAtlasMeshToLabelImageCostAndGradientCalculator.cxx
+             kvlAtlasMeshToIntensityImageCostAndGradientCalculator.cxx
+             kvlConditionalGaussianEntropyCostAndGradientCalculator.cxx
+             kvlMutualInformationCostAndGradientCalculator.cxx
+             kvlHistogrammer.cxx
+             kvlAtlasMeshSummaryDrawer.cxx
              itkMGHImageIO.cxx
              itkMGHImageIOFactory.cxx )
 TARGET_LINK_LIBRARIES( kvlGEMSCommon
                        ${ITK_LIBRARIES}
-                       ${TETGEN_LIB} 
                        ${ZLIB_LIBRARIES} 
                      )
 

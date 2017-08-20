@@ -93,6 +93,7 @@ bool MyVTKUtils::VTKScreenCapture( vtkRenderWindow* renderWnd,
                                    bool bAntiAliasing,
                                    int nMag )
 {
+  Q_UNUSED(bAntiAliasing);
   QString fn = filename;
   vtkImageWriter* writer = 0;
   QString ext = QFileInfo(filename).suffix();
@@ -213,6 +214,7 @@ bool MyVTKUtils::BuildLabelContourActor( vtkImageData* data_in,
                                          int labelIndex,
                                          vtkActor* actor_out, int nSmoothIterations, int* ext, bool bAllRegions, bool bUpsample )
 {
+  Q_UNUSED(ext);
   int i = labelIndex;
   vtkSmartPointer<vtkImageThreshold> threshold = vtkSmartPointer<vtkImageThreshold>::New();
   threshold->SetInput( data_in );
@@ -267,8 +269,9 @@ bool MyVTKUtils::BuildLabelContourActor( vtkImageData* data_in,
                                          const QList<int>& labelIndices,
                                          vtkActor* actor_out, int nSmoothIterations, int* ext, bool bAllRegions, bool bUpsample )
 {
-  double nValue = 1;
-  int nSwell = 2;
+  Q_UNUSED(ext);
+//  double nValue = 1;
+//  int nSwell = 2;
 
   vtkSmartPointer<vtkAppendPolyData> append = vtkSmartPointer<vtkAppendPolyData>::New();
   foreach (int i, labelIndices)
@@ -582,5 +585,46 @@ void MyVTKUtils::GetLivewirePoints( vtkImageData* image_in,
     pts_out->InsertNextPoint( p[0] + offset[0],
         p[1] + offset[1],
         p[2] + offset[2] );
+  }
+}
+
+
+double MyVTKUtils::GetImageDataComponent(char* ptr, int* dim, size_t nNumberOfFrames, size_t i, size_t j, size_t k, size_t nframe, int data_type)
+{
+  switch (data_type)
+  {
+  case VTK_UNSIGNED_CHAR:
+    return ((unsigned char*)ptr)[(k*dim[0]*dim[1]+j*dim[0]+i)*nNumberOfFrames + nframe];
+  case VTK_INT:
+    return ((int*)ptr)[(k*dim[0]*dim[1]+j*dim[0]+i)*nNumberOfFrames + nframe];
+  case VTK_LONG:
+    return ((long*)ptr)[(k*dim[0]*dim[1]+j*dim[0]+i)*nNumberOfFrames + nframe];
+  case VTK_FLOAT:
+    return ((float*)ptr)[(k*dim[0]*dim[1]+j*dim[0]+i)*nNumberOfFrames + nframe];
+  case VTK_SHORT:
+    return ((short*)ptr)[(k*dim[0]*dim[1]+j*dim[0]+i)*nNumberOfFrames + nframe];
+  }
+  return 0;
+}
+
+void MyVTKUtils::SetImageDataComponent(char* ptr, int* dim, size_t nNumberOfFrames, size_t i, size_t j, size_t k, size_t nframe, int data_type, double val)
+{
+  switch (data_type)
+  {
+  case VTK_UNSIGNED_CHAR:
+    ((unsigned char*)ptr)[(k*dim[0]*dim[1]+j*dim[0]+i)*nNumberOfFrames + nframe] = (unsigned char)val;
+    break;
+  case VTK_INT:
+    ((int*)ptr)[(k*dim[0]*dim[1]+j*dim[0]+i)*nNumberOfFrames + nframe] = (int)val;
+    break;
+  case VTK_LONG:
+    ((long*)ptr)[(k*dim[0]*dim[1]+j*dim[0]+i)*nNumberOfFrames + nframe] = (long)val;
+    break;
+  case VTK_FLOAT:
+    ((float*)ptr)[(k*dim[0]*dim[1]+j*dim[0]+i)*nNumberOfFrames + nframe] = (float)val;
+    break;
+  case VTK_SHORT:
+    ((short*)ptr)[(k*dim[0]*dim[1]+j*dim[0]+i)*nNumberOfFrames + nframe] = (short)val;
+    break;
   }
 }

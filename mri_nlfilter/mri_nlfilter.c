@@ -57,6 +57,7 @@ static void print_version(void) ;
 
 char *Progname ;
 
+static char *histo_template_fname ;
 static int crop = 1 ;
 static int no_offset = 0 ;
 static int filter_type = FILTER_MINMAX ;
@@ -82,8 +83,7 @@ static MRI *mri_mean_mask = NULL ;
 static int region_size = REGION_SIZE ;
 int
 main(int argc, char *argv[]) {
-  char   **av ;
-  int    ac, nargs, width, height, depth, x, y, z, xborder, yborder, zborder,
+  int    nargs, width, height, depth, x, y, z, xborder, yborder, zborder,
   xrborder, yrborder, zrborder ;
   char   *in_fname, *out_fname ;
   MRI    *mri_smooth, *mri_grad, *mri_filter_src, *mri_filter_dst, *mri_dst,
@@ -101,8 +101,6 @@ main(int argc, char *argv[]) {
   ErrorInit(NULL, NULL, NULL) ;
   DiagInit(NULL, NULL, NULL) ;
 
-  ac = argc ;
-  av = argv ;
   for ( ; argc > 1 && ISOPTION(*argv[1]) ; argc--, argv++) {
     nargs = get_option(argc, argv) ;
     argc -= nargs ;
@@ -138,6 +136,8 @@ main(int argc, char *argv[]) {
     clip_region.dz = mri_full->depth-1 ;
   }
   REGIONexpand(&clip_region, &clip_region, (filter_window_size+1)/2) ;
+  if (mri_full->depth == 1)
+    clip_region.dz = 1 ;
   mri_src = MRIextractRegion(mri_full, NULL, &clip_region) ;
   width = mri_src->width ;
   height = mri_src->height ;
@@ -149,7 +149,21 @@ main(int argc, char *argv[]) {
 
   printf("filter number: %d\n",filter_type);
 
-  if (filter_type == FILTER_MEAN_MASKED)
+  if (filter_type == FILTER_HISTO_MATCH)
+  {
+    MRI *mri_template ;
+    
+    mri_template = MRIread(histo_template_fname) ;
+    if (mri_template == NULL)
+      exit(Gerror) ;
+    //    mri_dst = MRIhistogramNormalize(mri_src, mri_template, mri_dst);
+    mri_dst = MRIhistoEqualize(mri_src, mri_template, mri_dst, 0, 28000);
+    MRIfree(&mri_template) ;
+    printf("writing histogram matched image to %s\n", out_fname) ;
+    MRIwrite(mri_dst, out_fname) ;
+    exit(Gerror) ;
+  }
+  else if (filter_type == FILTER_MEAN_MASKED)
   {
     char *mask_fname = argv[2] ;
     int  f, x, y, z, n, xi, yi, zi, xk, yk, zk, num ;
@@ -206,12 +220,19 @@ main(int argc, char *argv[]) {
     switch (filter_type)
     {
     default:
+      ErrorExit(ERROR_UNSUPPORTED, "%s: unsupported no crop no offset filter %d\n", Progname, filter_type) ;
     case FILTER_GAUSSIAN:
       mri_tmp = MRIconvolveGaussian(mri_full, NULL, mri_gaussian) ;
       if (!mri_tmp)
 	ErrorExit(ERROR_NOMEMORY,
 		  "%s: could not allocate temporary buffer space",Progname);
       break ;
+    case FILTER_MEDIAN:
+      mri_tmp = MRImedian(mri_full, NULL, filter_window_size, NULL) ;
+      if (!mri_tmp)
+	ErrorExit(ERROR_NOMEMORY,
+		  "%s: could not allocate temporary buffer space",Progname);
+      
     }
     MRIcopy(mri_tmp, mri_full) ;
     MRIfree(&mri_tmp) ;
@@ -425,6 +446,13 @@ get_option(int argc, char *argv[]) {
     filter_type = FILTER_CPOLV_MEDIAN ;
   else if (!stricmp(option, "minmax"))
     filter_type = FILTER_MINMAX ;
+  else if (!stricmp(option, "hmatch"))
+  {
+    filter_type = FILTER_HISTO_MATCH ;
+    histo_template_fname = argv[2] ;
+    nargs = 1 ;
+    printf("histogram matching input image to %s\n", histo_template_fname) ;
+  }
   else if (!stricmp(option, "meanmask"))
     filter_type = FILTER_MEAN_MASKED ;
   else if (!stricmp(option, "median"))

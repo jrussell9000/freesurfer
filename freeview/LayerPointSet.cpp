@@ -48,6 +48,9 @@
 #include <vtkTriangleFilter.h>
 #include <vtkSmartPointer.h>
 #include <vtkPointData.h>
+#include <QDebug>
+#include <QFile>
+#include <QJsonDocument>
 
 #define NUM_OF_SIDES  10  // must be even number!
 
@@ -94,8 +97,7 @@ LayerPointSet::LayerPointSet( LayerMRI* ref, int nType, QObject* parent ) : Laye
   connect(p, SIGNAL(ColorMapChanged()), this, SLOT(UpdateColorMap()));
   connect(p, SIGNAL(RadiusChanged(double)), this, SLOT(RebuildActors()));
   connect(p, SIGNAL(SplineRadiusChanged(double)), this, SLOT(RebuildActors()));
-  connect(p, SIGNAL(ScalarLayerChanged(LayerMRI*)), this, SLOT(RebuildActors()));
-  connect(p, SIGNAL(ScalarSetChanged()), this, SLOT(RebuildActors()));
+  connect(p, SIGNAL(ScalarChanged()), this, SLOT(RebuildActors()));
   connect(p, SIGNAL(SnapToVoxelCenterChanged(bool)), this, SLOT(UpdateSnapToVoxelCenter()));
   connect(p, SIGNAL(SplineVisibilityChanged(bool)), this, SLOT(UpdateSplineVisibility()));
 }
@@ -113,25 +115,78 @@ LayerPointSet::~LayerPointSet()
 
 bool LayerPointSet::LoadFromFile( const QString& filename )
 {
-  if ( GetProperty()->GetType() == LayerPropertyPointSet::ControlPoint )
+  if (!LoadFromJsonFile(filename))
   {
-    if ( !m_pointSetSource->ReadAsControlPoints( filename ) )
+    if ( GetProperty()->GetType() == LayerPropertyPointSet::ControlPoint )
     {
-      return false;
+      if ( !m_pointSetSource->ReadAsControlPoints( filename ) )
+      {
+        return false;
+      }
     }
-  }
-  else
-  {
-    if ( !m_pointSetSource->ReadAsLabel( filename ) )
+    else
     {
-      return false;
+      if ( !m_pointSetSource->ReadAsLabel( filename ) )
+      {
+        return false;
+      }
     }
-  }
 
-  m_points.clear();
-  m_pointSetSource->LabelToPointSet( m_points, m_layerRef->GetSourceVolume() );
+    GetProperty()->SetStatRange(m_pointSetSource->GetMinStat(), m_pointSetSource->GetMaxStat());
+    m_points.clear();
+    m_pointSetSource->LabelToPointSet( m_points, m_layerRef->GetSourceVolume() );
+  }
   SetFileName( filename );
   RebuildActors();
+
+  return true;
+}
+
+bool LayerPointSet::LoadFromJsonFile(const QString &filename)
+{
+  QFile file( filename );
+  if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+  {
+    cerr << qPrintable(file.errorString()) << "\n";;
+    return false;
+  }
+  m_mapEnhancedData = QJsonDocument::fromJson(file.readAll()).toVariant().toMap();
+  if (m_mapEnhancedData.isEmpty())
+    return false;
+
+  if (m_mapEnhancedData.value("data_type").toString() != "fs_pointset")
+  {
+    cerr << "Not a freesurfer pointset file\n";
+    return false;
+  }
+
+  QVariantList list = m_mapEnhancedData.value("points").toList();
+  QString coord_strg = m_mapEnhancedData.value("vox2ras").toString();
+  FSVolume* ref_vol = m_layerRef->GetSourceVolume();
+  m_points.clear();
+  foreach (QVariant v, list)
+  {
+    QVariantMap map = v.toMap();
+    QVariantMap coords = map["coordinates"].toMap();
+    ControlPoint wp;
+    wp.pt[0] = coords["x"].toDouble();
+    wp.pt[1] = coords["y"].toDouble();
+    wp.pt[2] = coords["z"].toDouble();
+    wp.value = map["legacy_stat"].toDouble();
+    wp.info = map;
+    if ( coord_strg == "tkreg" )
+    {
+      ref_vol->TkRegToNativeRAS( wp.pt, wp.pt );
+    }
+    else if (coord_strg == "voxel")
+    {
+      MRIvoxelToWorld(ref_vol->GetMRI(), wp.pt[0], wp.pt[1], wp.pt[2], wp.pt, wp.pt+1, wp.pt+2);
+    }
+    ref_vol->NativeRASToRAS( wp.pt, wp.pt );
+    ref_vol->RASToTarget( wp.pt, wp.pt );
+    m_points << wp;
+  }
+  GetProperty()->SetType(LayerPropertyPointSet::Enhanced);
 
   return true;
 }
@@ -159,13 +214,11 @@ bool LayerPointSet::Save()
 
   bool bSaved = false;
   if ( GetProperty()->GetType() == LayerPropertyPointSet::ControlPoint )
-  {
     bSaved = m_pointSetSource->WriteAsControlPoints( m_sFilename );
-  }
-  else
-  {
+  else if (GetProperty()->GetType() == LayerPropertyPointSet::WayPoint )
     bSaved = m_pointSetSource->WriteAsLabel( m_sFilename );
-  }
+  else
+    bSaved = SaveAsJson(m_sFilename);
 
   if ( !bSaved )
   {
@@ -173,6 +226,47 @@ bool LayerPointSet::Save()
   }
 
   return bSaved;
+}
+
+bool LayerPointSet::SaveAsJson(const QString& filename)
+{
+  QVariantList list;
+  FSVolume* ref_vol = m_layerRef->GetSourceVolume();
+  double pos[3];
+  foreach (ControlPoint p, m_points)
+  {
+    QVariantMap map = p.info;
+    // convert to tkreg coords
+    ref_vol->TargetToRAS( p.pt, pos );
+    ref_vol->RASToNativeRAS( pos, pos );
+    ref_vol->NativeRASToTkReg(pos, pos);
+    QVariantMap coords;
+    coords["x"] = pos[0];
+    coords["y"] = pos[1];
+    coords["z"] = pos[2];
+    map["coordinates"] = coords;
+    if (!map.contains("legacy_stat"))
+      map["legacy_stat"] = p.value;
+    list << map;
+  }
+
+  m_mapEnhancedData["points"] = list;
+  m_mapEnhancedData["data_type"] = "fs_pointset";
+  m_mapEnhancedData["vox2ras"] = "tkreg";
+
+  QFile file( filename );
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+  {
+    QString strg = file.errorString();
+    if (strg.isEmpty())
+      cerr << "Can not open file for writing\n";
+    else
+      cerr << qPrintable(strg) << "\n";
+    return false;
+  }
+
+  file.write(QJsonDocument::fromVariant(m_mapEnhancedData).toJson());
+  return true;
 }
 
 void LayerPointSet::UpdateLabelData()
@@ -229,6 +323,8 @@ void LayerPointSet::Append2DProps( vtkRenderer* renderer, int nPlane )
 
 void LayerPointSet::Append3DProps( vtkRenderer* renderer, bool* bSliceVisibility )
 {
+  Q_UNUSED(renderer);
+  Q_UNUSED(bSliceVisibility);
   renderer->AddViewProp( m_actorSpline );
   renderer->AddViewProp( m_actorBalls );
 }
@@ -274,6 +370,7 @@ bool LayerPointSet::HasProp( vtkProp* prop )
 
 void LayerPointSet::OnSlicePositionChanged( int nPlane )
 {
+  Q_UNUSED(nPlane);
   RebuildActors( false );   // no need to rebuild 3D points
 }
 
@@ -293,24 +390,27 @@ void LayerPointSet::RebuildActors( bool bRebuild3D )
   double scale = qMin( voxel_size[0], qMin( voxel_size[1], voxel_size[2] ) );
   double radius = GetProperty()->GetRadius();
 
-  vtkAppendPolyData* append = vtkAppendPolyData::New();
+  vtkSmartPointer<vtkAppendPolyData> append = vtkSmartPointer<vtkAppendPolyData>::New();
   vtkPoints* pts = vtkPoints::New();
   vtkCellArray* lines = vtkCellArray::New();
   lines->InsertNextCell( m_points.size() );
   for ( int i = 0; i < m_points.size(); i++ )
   {
-    vtkSphereSource* sphere = vtkSphereSource::New();
-    sphere->SetCenter( m_points[i].pt );
-    sphere->SetRadius( radius * scale );
-    sphere->SetThetaResolution( 10 );
-    sphere->SetPhiResolution( 20 );
-    append->AddInput( sphere->GetOutput() );
-    sphere->Delete();
+    if (radius > 0)
+    {
+      vtkSphereSource* sphere = vtkSphereSource::New();
+      sphere->SetCenter( m_points[i].pt );
+      sphere->SetRadius( radius * scale );
+      sphere->SetThetaResolution( 10 );
+      sphere->SetPhiResolution( 20 );
+      append->AddInput( sphere->GetOutput() );
+      sphere->Delete();
+    }
     pts->InsertNextPoint( m_points[i].pt );
     lines->InsertCellPoint( i );
   }
   vtkPolyDataMapper* mapper = vtkPolyDataMapper::New();
-  if ( m_points.size() > 0 )
+  if ( m_points.size() > 0 && radius > 0 )
   {
     mapper->SetInput( append->GetOutput() );
   }
@@ -318,7 +418,6 @@ void LayerPointSet::RebuildActors( bool bRebuild3D )
   {
     mapper->SetInput( vtkSmartPointer<vtkPolyData>::New() );
   }
-  append->Delete();
   m_actorBalls->SetMapper( mapper );
   mapper->Delete();
 
@@ -336,6 +435,8 @@ void LayerPointSet::RebuildActors( bool bRebuild3D )
     }
     if ( m_points.size() > 1 )
     {
+      polydata->Update();
+      UpdateScalars(polydata);
       spline->SetInput( polydata );
       vtkTubeFilter* tube = vtkTubeFilter::New();
       tube->SetNumberOfSides( NUM_OF_SIDES );
@@ -346,7 +447,6 @@ void LayerPointSet::RebuildActors( bool bRebuild3D )
       tube->Update();
       polydata_tube = tube->GetOutput();
       m_actorSpline->SetMapper( m_mapper );
-      UpdateScalars();
       tube->Delete();
     }
     polydata->Delete();
@@ -364,7 +464,7 @@ void LayerPointSet::RebuildActors( bool bRebuild3D )
     int n = 0;
     for ( int j = 0; j < m_points.size(); j++ )
     {
-      if ( fabs( m_dSlicePosition[i] - m_points[j].pt[i] ) < ( voxel_size[i] / 2 ) )
+      if ( radius > 0 && fabs( m_dSlicePosition[i] - m_points[j].pt[i] ) < ( voxel_size[i] / 2 ) )
       {
         vtkSphereSource* sphere = vtkSphereSource::New();
         double point[3] = { m_points[j].pt[0], m_points[j].pt[1], m_points[j].pt[2] };
@@ -429,6 +529,7 @@ void LayerPointSet::RebuildActors( bool bRebuild3D )
       vtkSmartPointer<vtkPolyData> cutpoly = vtkSmartPointer<vtkPolyData>::New();
       cutpoly->SetPoints( stripper->GetOutput()->GetPoints() );
       cutpoly->SetPolys( stripper->GetOutput()->GetLines() );
+      cutpoly->GetPointData()->SetScalars(stripper->GetOutput()->GetPointData()->GetScalars());
 
       vtkSmartPointer<vtkTriangleFilter> triangleFilter = vtkSmartPointer<vtkTriangleFilter>::New();
       triangleFilter->SetInput( cutpoly );
@@ -440,48 +541,51 @@ void LayerPointSet::RebuildActors( bool bRebuild3D )
     }
   }
 
+  UpdateColorMap();
+
   if ( !bRebuild3D )
   {
     blockSignals(false);
     return;
   }
 
-
-  UpdateColorMap();
   UpdateOpacity();
 
   blockSignals(false);
   emit ActorUpdated();
 }
 
-void LayerPointSet::UpdateScalars()
+void LayerPointSet::UpdateScalars(vtkPolyData* polydata)
 {
-  if ( 1 )
+  if ( true )
   {
     LayerMRI* layer = GetProperty()->GetScalarLayer();
-    vtkPolyData* polydata = m_mapper->GetInput();
     vtkPoints* pts = polydata->GetPoints();
     int nPts = pts->GetNumberOfPoints();
     vtkFloatArray* scalars = vtkFloatArray::New();
     scalars->SetNumberOfValues( nPts );
-    double pt[3] = { 0, 0, 0 };
+    //    double pt[3] = { 0, 0, 0 };
     double val = 0;
     for ( int i = 0; i < nPts; i++ )
     {
-      if ( (i%NUM_OF_SIDES) == 0 )
+      if ( true ) // (i%NUM_OF_SIDES) == 0 )
       {
-        double* p1 = pts->GetPoint( i );
-        double* p2 = pts->GetPoint( i + NUM_OF_SIDES/2 );
-        pt[0] = ( p1[0] + p2[0] ) / 2;
-        pt[1] = ( p1[1] + p2[1] ) / 2;
-        pt[2] = ( p1[2] + p2[2] ) / 2;
+        //        double* p1 = pts->GetPoint( i );
+        //        double* p2 = pts->GetPoint( i + NUM_OF_SIDES/2 );
+        //        pt[0] = ( p1[0] + p2[0] ) / 2;
+        //        pt[1] = ( p1[1] + p2[1] ) / 2;
+        //        pt[2] = ( p1[2] + p2[2] ) / 2;
         if ( layer && GetProperty()->GetScalarType() == LayerPropertyPointSet::ScalarLayer )
         {
-          val = layer->GetVoxelValue( pt );
+          val = layer->GetVoxelValue( pts->GetPoint(i) );
         }
         else if ( GetProperty()->GetScalarType() == LayerPropertyPointSet::ScalarSet )
         {
-          val = GetProperty()->GetActiveScalarSet().dValue[i/NUM_OF_SIDES];
+          val = GetProperty()->GetActiveScalarSet().dValue[i];
+        }
+        else
+        {
+          val = m_points[i].value;
         }
       }
       scalars->SetValue( i, val );
@@ -515,7 +619,7 @@ int LayerPointSet::FindPoint( double* ras, double tolerance )
 // returns index of the point
 int LayerPointSet::AddPoint( double* ras_in, double value )
 {
-  // cout << ras[0] << " " << ras[1] << " " << ras[2] << endl;
+  int nRet;
   double ras[3];
   if ( GetProperty()->GetSnapToVoxelCenter() )
   {
@@ -530,20 +634,13 @@ int LayerPointSet::AddPoint( double* ras_in, double value )
 
   if ( m_points.size() < 2 )
   {
-    WayPoint p;
+    ControlPoint p;
     p.pt[0] = ras[0];
     p.pt[1] = ras[1];
     p.pt[2] = ras[2];
     p.value = value;
     m_points.push_back( p );
-
-    RebuildActors();
-
-    SetModified();
-
-    emit PointAdded();
-
-    return m_points.size() - 1;
+    nRet = m_points.size() - 1;
   }
   else
   {
@@ -590,7 +687,7 @@ int LayerPointSet::AddPoint( double* ras_in, double value )
       n = n2 + 1;
     }
 
-    WayPoint p;
+    ControlPoint p;
     p.pt[0] = ras[0];
     p.pt[1] = ras[1];
     p.pt[2] = ras[2];
@@ -605,18 +702,18 @@ int LayerPointSet::AddPoint( double* ras_in, double value )
       m_points.insert( m_points.begin() + n, p );
     }
 
-    SetModified();
-
-    RebuildActors();
-
-    emit PointAdded();
-
-    return n;
+    nRet = n;
   }
+
+  SetModified();
+  RebuildActors();
+  emit PointAdded(nRet);
+  return nRet;
 }
 
 bool LayerPointSet::RemovePoint( double* ras, double tolerance )
 {
+  Q_UNUSED(tolerance);
   return RemovePoint( FindPoint( ras ) );
 }
 
@@ -633,12 +730,12 @@ bool LayerPointSet::RemovePoint( int nIndex )
 
   RebuildActors();
 
-  emit PointRemoved();
+  emit PointRemoved(nIndex);
 
   return true;
 }
 
-void LayerPointSet::UpdatePoint( double* ras, int nIndex, bool rebuildActor )
+void LayerPointSet::UpdatePoint( int nIndex, double* ras, bool rebuildActor )
 {
   if ( GetProperty()->GetSnapToVoxelCenter() )
   {
@@ -659,11 +756,24 @@ void LayerPointSet::UpdatePoint( double* ras, int nIndex, bool rebuildActor )
   }
 }
 
+void LayerPointSet::UpdatePoint(int nIndex, const QString &key, const QVariant &value)
+{
+  QVariantMap map = m_points[nIndex].info;
+  map[key] = value;
+  m_points[nIndex].info = map;
+  if (m_mapEnhancedData.isEmpty())
+    m_mapEnhancedData["data_type"] = "fs_pointset";
+
+  if (key == "legacy_stat")
+    m_points[nIndex].value = value.toDouble();
+  SetModified();
+}
+
 void LayerPointSet::UpdateSnapToVoxelCenter()
 {
   for ( int i = 0; i < m_points.size(); i++ )
   {
-    UpdatePoint( m_points[i].pt, i, false );
+    UpdatePoint(i, m_points[i].pt, false );
   }
   this->RebuildActors();
 }
@@ -693,10 +803,26 @@ void LayerPointSet::UpdateColorMap()
   case LayerPropertyPointSet::SolidColor:
     m_mapper->ScalarVisibilityOff();
     m_actorSpline->GetProperty()->SetColor( GetProperty()->GetSplineColor() );
+    if (m_actorSplineSlice[0]->GetMapper())
+    {
+      for (int i = 0; i < 3; i++)
+      {
+        m_actorSplineSlice[i]->GetMapper()->ScalarVisibilityOff();
+        m_actorSplineSlice[i]->GetProperty()->SetColor(GetProperty()->GetSplineColor());
+      }
+    }
     break;
   case LayerPropertyPointSet::HeatScale:
     m_mapper->ScalarVisibilityOn();
     m_mapper->SetLookupTable( GetProperty()->GetHeatScaleLUT() );
+    if (m_actorSplineSlice[0]->GetMapper())
+    {
+      for (int i = 0; i < 3; i++)
+      {
+        m_actorSplineSlice[i]->GetMapper()->ScalarVisibilityOn();
+        m_actorSplineSlice[i]->GetMapper()->SetLookupTable( GetProperty()->GetHeatScaleLUT() );
+      }
+    }
     break;
   }
   emit ActorUpdated();
@@ -704,6 +830,9 @@ void LayerPointSet::UpdateColorMap()
 
 bool LayerPointSet::Rotate( std::vector<RotationElement>& rotations, wxWindow* wnd, wxCommandEvent& event )
 {
+  Q_UNUSED(rotations);
+  Q_UNUSED(wnd);
+  Q_UNUSED(event);
   m_points.clear();
   m_pointSetSource->LabelToPointSet( m_points, m_layerRef->GetSourceVolume() );
   RebuildActors();
@@ -714,7 +843,7 @@ bool LayerPointSet::Rotate( std::vector<RotationElement>& rotations, wxWindow* w
 std::vector<double> LayerPointSet::GetPoints()
 {
   std::vector<double> list;
-  foreach (WayPoint wp, m_points)
+  foreach (ControlPoint wp, m_points)
   {
     list.push_back(wp.pt[0]);
     list.push_back(wp.pt[1]);
@@ -734,6 +863,14 @@ void LayerPointSet::GetPoint(int nIndex, double *pt_out)
   }
 }
 
+ControlPoint LayerPointSet::GetPoint(int nIndex)
+{
+  if (nIndex < m_points.size())
+    return m_points[nIndex];
+  else
+    return ControlPoint();
+}
+
 int LayerPointSet::GetNumberOfPoints()
 {
   return m_points.size();
@@ -749,4 +886,9 @@ bool LayerPointSet::GetCentroidPosition(double *pos)
   }
   else
     return false;
+}
+
+bool LayerPointSet::IsEnhanced()
+{
+  return !m_mapEnhancedData.isEmpty();
 }
