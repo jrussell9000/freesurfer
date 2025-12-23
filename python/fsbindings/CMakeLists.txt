@@ -27,7 +27,7 @@ set_target_properties(fsbindings PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOU
 
 if(HOST_OS MATCHES "Ubuntu24")
    add_custom_command(TARGET fsbindings POST_BUILD COMMAND
-     cp -p -f /space/freesurfer/ubuntu22_x86_64/dev/python/packages/fsbindings/*.cpython-38-x86_64-linux-gnu.so ${CMAKE_CURRENT_SOURCE_DIR}/. && ls -lt *.cpython-38-x86_64-linux-gnu.so
+     cp -p -f ${CMAKE_CURRENT_SOURCE_DIR}/Ubuntu22/*.cpython-38-x86_64-linux-gnu.so ${CMAKE_CURRENT_SOURCE_DIR}/. && ls -lt *.cpython-38-x86_64-linux-gnu.so
      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
      COMMENT "Copy in ubuntu22 fsbindings libraries for ubuntu24"
    )
