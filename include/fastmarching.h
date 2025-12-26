@@ -81,23 +81,24 @@ class FastMarching
 {
 
   // type definition for the min-heap
-class HeapCompare : std::binary_function<stCoord, stCoord, bool>
-  {
-  protected:
-    MRI *mri;
-  public:
-    HeapCompare(MRI *_mri) : mri(_mri)
-    {}
-    
-    bool operator() (const stCoord &a, const stCoord &b) const
-    {
-      return (sign * 
-              MRIFvox(mri,a.x,a.y,a.z) > sign * 
-              MRIFvox(mri,b.x,b.y,b.z));
-    }
-    
-  };
+struct HeapCompare {
+    MRI* mri;
+    int sign; // Added: 'sign' was used in logic but missing in your class definition
 
+    // Use member initializer lists. 
+    // If 'sign' is meant to flip sort order, pass it here.
+    HeapCompare(MRI* mri_ptr, int sort_sign = 1) 
+        : mri(mri_ptr), sign(sort_sign) {}
+
+    // 1. Removed std::binary_function (removed in C++17)
+    // 2. Added 'noexcept' (comparators should generally not throw)
+    // 3. Mark function as 'const' (it doesn't modify the comparator state)
+    bool operator()(const stCoord& a, const stCoord& b) const noexcept {
+        // Assuming MRIFvox is a legacy C-style function or macro
+        return (sign * MRIFvox(mri, a.x, a.y, a.z)) > 
+               (sign * MRIFvox(mri, b.x, b.y, b.z));
+    }
+};
   typedef std::priority_queue<stCoord,std::vector<stCoord>,HeapCompare> CoordHeap;
 
 protected:
